@@ -1,4 +1,4 @@
-<?php namespace Edgji\LaravelImportEgnine;
+<?php namespace Edgji\LaravelImportEngine;
 
 use Illuminate\Support\ServiceProvider;
 use Mathielen\ImportEngine\Storage\Format\Discovery\MimeTypeDiscoverStrategy;
