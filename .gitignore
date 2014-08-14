@@ -1,5 +1,4 @@
-.buildpath
-.project
-.settings
+/vendor
+composer.phar
 composer.lock
-vendor
+.DS_Store

@@ -1,11 +1,13 @@
 <?php namespace Edgji\LaravelImportEngine;
 
 use Illuminate\Support\ServiceProvider;
+
 use Mathielen\ImportEngine\Storage\Format\Discovery\MimeTypeDiscoverStrategy;
 use Mathielen\ImportEngine\Importer\ImporterRepository;
 use Mathielen\ImportEngine\Storage\StorageLocator;
 use Mathielen\ImportEngine\Import\ImportBuilder;
 use Mathielen\ImportEngine\Import\Run\ImportRunner;
+use Mathielen\ImportEngine\ValueObject\ImportConfiguration;
 
 class LaravelImportEngineServiceProvider extends ServiceProvider {
 
@@ -16,21 +18,79 @@ class LaravelImportEngineServiceProvider extends ServiceProvider {
      */
     public function boot()
     {
-        $this->package('edgji/laravel-import-engine', 'importengine', __DIR__);
+        $this->package('edgji/laravel-import-engine', 'edgji/lie', __DIR__);
+
+        $this->conditionallyBindRoutes();
+    }
+
+    private function conditionallyBindRoutes()
+    {
+        $config = $this->app['config']['edgji/lie::config'];
+
+        // only bind import routes if default routing is enabled
+        if ( ! (isset($config['enable_default_routing']) && $config['enable_default_routing']))
+            return;
+
+        // let's pass along the app reference
+        $app = $this->app;
+
+        $this->app['router']->group($config['routing'], function($router) use ($app, $config)
+        {
+            $importers = array_keys($config['importers']);
+            foreach($importers as $importer)
+            {
+                // determine http method
+                // if method does not exists or no default is defined skip binding route
+                if ( ! $method = $this->importerHttpMethod($config, $importer)) continue;
+
+                $router->$method($importer, function() use ($app, $importer, $config)
+                {
+                    //handle the uploaded file
+                    $storageLocator = $app['importengine.import.storagelocator'];
+                    $storageSelection = $storageLocator->selectStorage('default', reset($app['request']->file(null, array())));
+
+                    //create a new import configuration with your file for the specified importer
+                    //you can also use auto-discovery with preconditions (see config above and omit 2nd parameter here)
+                    $importConfiguration = new ImportConfiguration($storageSelection, $importer);
+
+                    //build the import engine
+                    $importBuilder = $app['importengine.import.builder'];
+                    $importBuilder->build($importConfiguration);
+
+                    //run the import
+                    $importRunner = $app['mathielen_importengine.import.runner'];
+                    $importRun = $importRunner->run($importConfiguration->toRun());
+
+                    return $importRun->getStatistics();
+                });
+            }
+        });
+    }
+
+    private function importerHttpMethod($config, $importer)
+    {
+        if (isset($config['importers'][$importer]['http_method']))
+        {
+            $method = strtolower($config['importers'][$importer]['http_method']);
+            if (in_array($method, array('get', 'post'))) return $method;
+        }
+
+        return $config['default_http_method'] ?: false;
     }
 
     /**
-     * Register the service provider.
-     *
-     * @return void
-     */
-    public function register()
-    {
+	 * Register the service provider.
+	 *
+	 * @return void
+	 */
+	public function register()
+	{
         $this->registerFormatDiscoverer();
         $this->registerRepository();
         $this->registerStorageLocator();
         $this->registerBuilder();
-    }
+        $this->registerRunner();
+	}
 
     protected function registerFormatDiscoverer()
     {
@@ -46,7 +106,7 @@ class LaravelImportEngineServiceProvider extends ServiceProvider {
         {
             $importerRepository = new ImporterRepository();
 
-            foreach ($app['config']['importengine::importers'] as $name => $importConfig) {
+            foreach ($app['config']['edgji/lie::importers'] as $name => $importConfig) {
                 $finder = null;
                 if (array_key_exists('preconditions', $importConfig)) {
                     $finder = $this->generateFinder($importConfig['preconditions']);
@@ -71,9 +131,9 @@ class LaravelImportEngineServiceProvider extends ServiceProvider {
         {
             $storageLocator = new StorageLocator();
 
-            if (isset($app['config']['importengine::storageprovider']))
+            if (isset($app['config']['edgji/lie::storageprovider']))
             {
-                foreach ($app['config']['importengine::storageprovider'] as $sourceConfig) {
+                foreach ($app['config']['edgji/lie::storageprovider'] as $sourceConfig) {
                     $this->addStorageProvider($storageLocator, $sourceConfig);
                 }
             }
@@ -282,14 +342,14 @@ class LaravelImportEngineServiceProvider extends ServiceProvider {
         return $storage;
     }
 
-    /**
-     * Get the services provided by the provider.
-     *
-     * @return array
-     */
-    public function provides()
-    {
-        return array();
-    }
+	/**
+	 * Get the services provided by the provider.
+	 *
+	 * @return array
+	 */
+	public function provides()
+	{
+		return array();
+	}
 
 }
