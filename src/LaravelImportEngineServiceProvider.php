@@ -19,63 +19,6 @@ class LaravelImportEngineServiceProvider extends ServiceProvider {
     public function boot()
     {
         $this->package('edgji/laravel-import-engine', 'edgji/lie', __DIR__);
-
-        $this->conditionallyBindRoutes();
-    }
-
-    private function conditionallyBindRoutes()
-    {
-        $config = $this->app['config']['edgji/lie::config'];
-
-        // only bind import routes if default routing is enabled
-        if ( ! (isset($config['enable_default_routing']) && $config['enable_default_routing']))
-            return;
-
-        // let's pass along the app reference
-        $app = $this->app;
-
-        $this->app['router']->group($config['routing'], function($router) use ($app, $config)
-        {
-            $importers = array_keys($config['importers']);
-            foreach($importers as $importer)
-            {
-                // determine http method
-                // if method does not exists or no default is defined skip binding route
-                if ( ! $method = $this->importerHttpMethod($config, $importer)) continue;
-
-                $router->$method($importer, function() use ($app, $importer, $config)
-                {
-                    //handle the uploaded file
-                    $storageLocator = $app['importengine.import.storagelocator'];
-                    $storageSelection = $storageLocator->selectStorage('default', reset($app['request']->file(null, array())));
-
-                    //create a new import configuration with your file for the specified importer
-                    //you can also use auto-discovery with preconditions (see config above and omit 2nd parameter here)
-                    $importConfiguration = new ImportConfiguration($storageSelection, $importer);
-
-                    //build the import engine
-                    $importBuilder = $app['importengine.import.builder'];
-                    $importBuilder->build($importConfiguration);
-
-                    //run the import
-                    $importRunner = $app['mathielen_importengine.import.runner'];
-                    $importRun = $importRunner->run($importConfiguration->toRun());
-
-                    return $importRun->getStatistics();
-                });
-            }
-        });
-    }
-
-    private function importerHttpMethod($config, $importer)
-    {
-        if (isset($config['importers'][$importer]['http_method']))
-        {
-            $method = strtolower($config['importers'][$importer]['http_method']);
-            if (in_array($method, array('get', 'post'))) return $method;
-        }
-
-        return $config['default_http_method'] ?: false;
     }
 
     /**
