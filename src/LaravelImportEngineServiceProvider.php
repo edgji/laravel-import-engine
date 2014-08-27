@@ -32,6 +32,8 @@ class LaravelImportEngineServiceProvider extends ServiceProvider {
         $this->registerRepository();
         $this->registerStorageLocator();
         $this->registerBuilder();
+        $this->registerEventDispatcher();
+        $this->registerWorkflowFactory();
         $this->registerRunner();
 	}
 
@@ -96,11 +98,37 @@ class LaravelImportEngineServiceProvider extends ServiceProvider {
         });
     }
 
+    protected function registerEventDispatcher()
+    {
+        $this->app['importengine.import.eventdispatcher'] = $this->app->share(function($app)
+        {
+            return new EventDispatcher();
+        });
+    }
+
+    protected function registerWorkflowFactory()
+    {
+        $this->app['importengine.import.workflowfactory'] = $this->app->share(function($app)
+        {
+            $eventDispatcher = $app['importengine.import.eventdispatcher'];
+            return new DefaultWorkflowFactory($eventDispatcher);
+        });
+    }
+
     protected function registerRunner()
     {
         $this->app['importengine.import.runner'] = $this->app->share(function($app)
         {
-            return new ImportRunner();
+            $workflowFactory = $app['importengine.import.workflowfactory'];
+            return new ImportRunner($workflowFactory);
+        });
+    }
+
+    protected function registerImportService()
+    {
+        $this->app['importengine.import.service'] = $this->app->share(function($app)
+        {
+            return new ImportService();
         });
     }
 
@@ -292,7 +320,14 @@ class LaravelImportEngineServiceProvider extends ServiceProvider {
 	 */
 	public function provides()
 	{
-		return array();
+		return array(
+            'importengine.importer.format_discoverer',
+            'importengine.importer.repository',
+            'importengine.import.storagelocator',
+            'importengine.import.builder',
+            'importengine.import.eventdispatcher',
+            'importengine.import.workflowfactory',
+            'importengine.import.runner',
 	}
 
 }
