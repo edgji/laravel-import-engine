@@ -2,12 +2,15 @@
 
 use Illuminate\Support\ServiceProvider;
 
+use Mathielen\ImportEngine\Import\Workflow\DefaultWorkflowFactory;
+use Symfony\Component\EventDispatcher\EventDispatcher;
+use Symfony\Component\Finder\Finder;
+
 use Mathielen\ImportEngine\Storage\Format\Discovery\MimeTypeDiscoverStrategy;
 use Mathielen\ImportEngine\Importer\ImporterRepository;
 use Mathielen\ImportEngine\Storage\StorageLocator;
 use Mathielen\ImportEngine\Import\ImportBuilder;
 use Mathielen\ImportEngine\Import\Run\ImportRunner;
-use Mathielen\ImportEngine\ValueObject\ImportConfiguration;
 
 class LaravelImportEngineServiceProvider extends ServiceProvider {
 
@@ -33,7 +36,6 @@ class LaravelImportEngineServiceProvider extends ServiceProvider {
         $this->registerStorageLocator();
         $this->registerBuilder();
         $this->registerEventDispatcher();
-        $this->registerWorkflowFactory();
         $this->registerRunner();
 	}
 
@@ -93,7 +95,7 @@ class LaravelImportEngineServiceProvider extends ServiceProvider {
         {
             $importerRepository = $app['importengine.importer.repository'];
             $storageLocator = $app['importengine.import.storagelocator'];
-            $eventDispatcher = null;
+            $eventDispatcher = $app['importengine.import.eventdispatcher'];
             return new ImportBuilder($importerRepository, $storageLocator, $eventDispatcher);
         });
     }
@@ -106,29 +108,12 @@ class LaravelImportEngineServiceProvider extends ServiceProvider {
         });
     }
 
-    protected function registerWorkflowFactory()
-    {
-        $this->app['importengine.import.workflowfactory'] = $this->app->share(function($app)
-        {
-            $eventDispatcher = $app['importengine.import.eventdispatcher'];
-            return new DefaultWorkflowFactory($eventDispatcher);
-        });
-    }
-
     protected function registerRunner()
     {
         $this->app['importengine.import.runner'] = $this->app->share(function($app)
         {
-            $workflowFactory = $app['importengine.import.workflowfactory'];
-            return new ImportRunner($workflowFactory);
-        });
-    }
-
-    protected function registerImportService()
-    {
-        $this->app['importengine.import.service'] = $this->app->share(function($app)
-        {
-            return new ImportService();
+            $eventDispatcher = $app['importengine.import.eventdispatcher'];
+            return new ImportRunner(new DefaultWorkflowFactory($eventDispatcher));
         });
     }
 
@@ -137,18 +122,24 @@ class LaravelImportEngineServiceProvider extends ServiceProvider {
         $finder = $this->app->make('Mathielen\ImportEngine\Importer\ImporterPrecondition');
 
         if (array_key_exists('filename', $finderConfig)) {
+            if ( ! is_array($finderConfig['filename']))
+                $finderConfig['filename'] = array($finderConfig['filename']);
             foreach ($finderConfig['filename'] as $conf) {
                 $finder->filename($conf);
             }
         }
 
         if (array_key_exists('format', $finderConfig)) {
+            if ( ! is_array($finderConfig['format']))
+                $finderConfig['format'] = array($finderConfig['format']);
             foreach ($finderConfig['format'] as $conf) {
                 $finder->format($conf);
             }
         }
 
         if (array_key_exists('fieldcount', $finderConfig)) {
+            if ( ! is_array($finderConfig['fieldcount']))
+                $finderConfig['fieldcount'] = array($finderConfig['fieldcount']);
             $finder->fieldcount($finderConfig['fieldcount']);
         }
 
@@ -167,7 +158,7 @@ class LaravelImportEngineServiceProvider extends ServiceProvider {
 
     private function generateObjectFactory(array $config)
     {
-        if ($config['type'] == 'jms_serializer') {
+        if (isset($config['type']) && $config['type'] == 'jms_serializer') {
             //return $this->app->make('Mathielen\DataImport\Writer\ObjectWriter\JmsSerializerObjectFactory', array(
             //    $config['class'],
             //    new Reference('jms_serializer')));
@@ -252,26 +243,39 @@ class LaravelImportEngineServiceProvider extends ServiceProvider {
     {
         switch ($config['type']) {
             case 'directory':
-                $spFinder = $this->app->make('Symfony\Component\Finder\Finder');
-                $spFinder->in($config['path']);
+                $spFinder = Finder::create();
+                $path = $this->cleanUpStoragePath($config['path']);
+                $spFinder->in($path);
                 $sp = $this->app->make('Mathielen\ImportEngine\Storage\Provider\FinderFileStorageProvider', array(
                     $spFinder
                 ));
                 break;
             case 'upload':
+                $path = $this->cleanUpStoragePath($config['path']);
                 $sp = $this->app->make('Mathielen\ImportEngine\Storage\Provider\UploadFileStorageProvider', array(
-                    $config['path']
+                    $path
                 ));
                 break;
             case 'doctrine':
                 $sp = null;
                 //TODO
                 break;
+            case 'service':
+                $sp = $this->app->make('Mathielen\ImportEngine\Storage\Provider\ServiceStorageProvider', array(
+                    $config['class'],
+                    $config['method']
+                ));
+                break;
             default:
                 throw new \InvalidArgumentException('Unknown type: '.$config['type']);
         }
 
         $storageLocator->register($id, $sp);
+    }
+
+    private function cleanUpStoragePath($path)
+    {
+        return str_replace("{app_storage}", $this->app['path.storage'], $path);
     }
 
     private function getStorage(array $config, $objectFactory=null)
@@ -294,14 +298,17 @@ class LaravelImportEngineServiceProvider extends ServiceProvider {
                 // $qb->setFactoryMethod('createQueryBuilder');
 
                 $storage = $this->app->make('Mathielen\ImportEngine\Storage\DoctrineStorage', array(
-                    new Reference('doctrine.orm.entity_manager'),
+                    null,
+                    //TODO laravel doctrine em
+                    //new Reference('doctrine.orm.entity_manager'),
                     $config
                 ));
 
                 break;
             case 'service':
+                $service = @$this->app[$config['service']] ?: $this->app->make($config['service']);
                 $storage = $this->app->make('Mathielen\ImportEngine\Storage\ServiceStorage', array(
-                    array(new Reference($config['service']), $config['method']), //callable
+                    array($service, $config['method']), //callable
                     $objectFactory //from parameter array
                 ));
 
@@ -326,8 +333,8 @@ class LaravelImportEngineServiceProvider extends ServiceProvider {
             'importengine.import.storagelocator',
             'importengine.import.builder',
             'importengine.import.eventdispatcher',
-            'importengine.import.workflowfactory',
             'importengine.import.runner',
+        );
 	}
 
 }
